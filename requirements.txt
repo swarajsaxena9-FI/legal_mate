@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+google-genai
+faiss-cpu
+numpy
+langchain-text-splitters
+httpx
+python-dotenv
+pydantic
+pytest
+pytest-asyncio
+python-multipart
