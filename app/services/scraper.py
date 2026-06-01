@@ -58,19 +58,39 @@ async def _scrape_indiankanoon(
     url: str,
 ) -> dict | None:
     async with sem:
+        # Try direct scraping first (works on residential IPs / local)
         try:
             resp = await client.get(url, headers=_IK_HEADERS, timeout=_TIMEOUT, follow_redirects=True)
             resp.raise_for_status()
             text = _extract_ik_text(resp.text)
             if len(text) >= _MIN_CHARS and not _is_error_page(text):
                 court = _extract_court_name(resp.text)
-                logger.info(f"IK direct scrape: {url} -> {len(text)} chars | court: {court}")
+                logger.info(f"IK direct: {url} -> {len(text)} chars")
                 return {"url": url, "text": text, "court": court}
-            logger.warning(f"IK scrape too short or error page: {url} ({len(text)} chars)")
-            return None
         except Exception as e:
-            logger.warning(f"IK scrape failed for {url}: {e}")
-            return None
+            logger.warning(f"IK direct failed for {url}: {e}")
+
+        # Fallback: Jina Reader (works from datacenter IPs like Render)
+        logger.info(f"Falling back to Jina for {url}")
+        headers = {"Accept": "text/plain", "X-Remove-Selector": "header,footer,nav,.sidebar"}
+        if JINA_API_KEY:
+            headers["Authorization"] = f"Bearer {JINA_API_KEY}"
+        try:
+            resp = await client.get(
+                _JINA_BASE + url,
+                headers=headers,
+                timeout=_TIMEOUT,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            text = resp.text.strip()
+            if len(text) >= _MIN_CHARS and not _is_error_page(text):
+                logger.info(f"Jina fallback: {url} -> {len(text)} chars")
+                return {"url": url, "text": text, "court": ""}
+        except Exception as e:
+            logger.warning(f"Jina fallback also failed for {url}: {e}")
+
+        return None
 
 
 async def _scrape_jina(
