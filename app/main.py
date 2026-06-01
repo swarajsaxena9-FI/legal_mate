@@ -1,6 +1,6 @@
 import time
-import logging
 import asyncio
+import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -42,20 +42,29 @@ async def search(
     timings: dict[str, float] = {}
     total_start = time.time()
 
-    # Stage 1: Extract legal query
+    # Read file bytes early so we can pass to extractor
+    file_bytes, mime = None, None
+    if file:
+        file_bytes = await file.read()
+        mime = file.content_type or "application/pdf"
+
+    # Stage 1: Extract (runs in thread so it doesn't block event loop)
     t = time.time()
     try:
-        if file:
-            file_bytes = await file.read()
-            mime = file.content_type or "application/pdf"
-            extracted = extract_legal_query(file_bytes=file_bytes, mime_type=mime)
+        loop = asyncio.get_event_loop()
+        if file_bytes:
+            extracted = await loop.run_in_executor(
+                None, lambda: extract_legal_query(file_bytes=file_bytes, mime_type=mime)
+            )
         else:
-            extracted = extract_legal_query(raw_text=text)
+            extracted = await loop.run_in_executor(
+                None, lambda: extract_legal_query(raw_text=text)
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
     timings["extract"] = round(time.time() - t, 2)
 
-    # Stage 2: Search for relevant URLs
+    # Stage 2: Search
     t = time.time()
     try:
         urls = await search_legal_urls(extracted.get("search_queries", []))
@@ -70,7 +79,7 @@ async def search(
             meta=SearchMeta(n_urls=0, n_docs_scraped=0, n_chunks=0, timings=timings),
         )
 
-    # Stage 3: Scrape URLs
+    # Stage 3: Scrape
     t = time.time()
     try:
         docs = await scrape_urls(urls)
@@ -86,31 +95,37 @@ async def search(
         )
 
     # Stage 4: Chunk
-    t = time.time()
     chunks = chunk_documents(docs)
     timings["chunk"] = round(time.time() - t, 2)
 
-    # Stage 5: Embed chunks + query
+    # Stage 5: Embed chunks + query (in executor to not block)
     t = time.time()
     try:
+        loop = asyncio.get_event_loop()
         chunk_texts = [c["text"] for c in chunks]
-        chunk_vecs = embed_texts(chunk_texts, task_type="RETRIEVAL_DOCUMENT")
         query_text = extracted.get("case_summary", text or "")
-        query_vec = embed_texts([query_text], task_type="RETRIEVAL_QUERY")
+
+        chunk_vecs, query_vec = await asyncio.gather(
+            loop.run_in_executor(None, lambda: embed_texts(chunk_texts, "RETRIEVAL_DOCUMENT")),
+            loop.run_in_executor(None, lambda: embed_texts([query_text], "RETRIEVAL_QUERY")),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
     timings["embed"] = round(time.time() - t, 2)
 
-    # Stage 6: FAISS similarity search
+    # Stage 6: FAISS
     t = time.time()
     top_chunks = top_k_matches(query_vec, chunk_vecs, chunks)
     timings["vector_search"] = round(time.time() - t, 2)
 
-    # Stage 7: LLM validation
+    # Stage 7: Validate
     t = time.time()
     try:
+        loop = asyncio.get_event_loop()
         case_summary = extracted.get("case_summary", text or "")
-        citations_raw = validate_matches(case_summary, top_chunks)
+        citations_raw = await loop.run_in_executor(
+            None, lambda: validate_matches(case_summary, top_chunks)
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Validation failed: {e}")
     timings["validate"] = round(time.time() - t, 2)

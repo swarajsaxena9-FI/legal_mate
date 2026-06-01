@@ -41,6 +41,7 @@ def validate_matches(user_case_summary: str, top_chunks: list[dict]) -> list[dic
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         return resp.text
