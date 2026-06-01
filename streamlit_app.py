@@ -112,33 +112,36 @@ if "results" in st.session_state and st.session_state["results"] is not None:
     with ctrl3:
         max_display = st.selectbox(
             "Show top N results",
-            options=[5, 10, 15, 20, "All"],
+            options=["All", 3, 5, 10, 15, 20],
             index=0,
+            help="Limit how many results to display after filtering",
         )
 
-    # Apply filter
-    filtered = [r for r in all_results if r.get("relevance_score", 0) * 100 >= min_score]
-
-    # Apply sort
+    # Step 1: sort entire result set first
     reverse = sort_order == "Highest First"
-    filtered = sorted(filtered, key=lambda x: x.get("relevance_score", 0), reverse=reverse)
+    sorted_results = sorted(all_results, key=lambda x: x.get("relevance_score", 0), reverse=reverse)
 
-    # Apply limit
+    # Step 2: apply similarity threshold filter
+    filtered = [r for r in sorted_results if r.get("relevance_score", 0) * 100 >= min_score]
+
+    # Step 3: apply top-N limit AFTER filtering (so N=5 means top 5 of those that pass threshold)
+    total_after_filter = len(filtered)
     if max_display != "All":
         filtered = filtered[:int(max_display)]
 
     # Stats bar
     total_count = len(all_results)
-    filtered_count = len(filtered)
     score_range = ""
     if filtered:
         hi = max(r["relevance_score"] for r in filtered) * 100
         lo = min(r["relevance_score"] for r in filtered) * 100
         score_range = f" · Range: {lo:.0f}%–{hi:.0f}%"
 
+    limit_note = f", showing top {max_display}" if max_display != "All" and total_after_filter > int(str(max_display)) else ""
+
     st.info(
-        f"Showing **{filtered_count}** of **{total_count}** cases "
-        f"(≥ {min_score}% similarity){score_range}"
+        f"Showing **{len(filtered)}** of **{total_count}** cases "
+        f"(≥ {min_score}% similarity{limit_note}){score_range}"
     )
 
     st.divider()

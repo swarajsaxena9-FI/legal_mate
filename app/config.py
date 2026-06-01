@@ -14,5 +14,5 @@ EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIM = 768
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 64
-TOP_K = 10
+TOP_K = 20  # always fetch max; UI filters client-side
 MAX_URLS = 10
