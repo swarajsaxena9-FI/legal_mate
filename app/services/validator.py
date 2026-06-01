@@ -22,7 +22,7 @@ Return a JSON array. Each item must have exactly these keys:
 - "reasoning": string (one sentence why this case is or isn't similar)
 - "source_url": string (the URL of this excerpt)
 
-Only include cases with relevance_score >= 0.3. Return ONLY valid JSON array, no markdown."""
+Include all cases with relevance_score >= 0.15. Return ONLY valid JSON array, no markdown."""
 
 
 def validate_matches(user_case_summary: str, top_chunks: list[dict]) -> list[dict]:

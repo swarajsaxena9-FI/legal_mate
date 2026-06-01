@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-_MAX_RETRIES = 4
-_BASE_DELAY = 2.0
+_MAX_RETRIES = 5
+_BASE_DELAY = 62.0  # free tier resets every 60s; wait full window
 
 
 def _retry_on_429(fn, *args, **kwargs):
@@ -24,7 +24,7 @@ def _retry_on_429(fn, *args, **kwargs):
                 if attempt < _MAX_RETRIES - 1:
                     logger.warning(f"Rate limit hit, retrying in {delay}s (attempt {attempt+1})")
                     time.sleep(delay)
-                    delay *= 2
+                    delay = min(delay * 1.5, 120.0)
                 else:
                     raise
             else:

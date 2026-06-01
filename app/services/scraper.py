@@ -26,6 +26,13 @@ def _is_error_page(text: str) -> bool:
     return any(signal in low for signal in _ERROR_SIGNALS)
 
 
+def _extract_court_name(html: str) -> str:
+    match = re.search(r'<div[^>]*class="[^"]*docsource[^"]*"[^>]*>(.*?)</div>', html, re.IGNORECASE | re.DOTALL)
+    if match:
+        return re.sub(r'<[^>]+>', '', match.group(1)).strip()
+    return ""
+
+
 def _extract_ik_text(html: str) -> str:
     """Extract judgement text from Indian Kanoon HTML."""
     # Remove script/style tags
@@ -56,8 +63,9 @@ async def _scrape_indiankanoon(
             resp.raise_for_status()
             text = _extract_ik_text(resp.text)
             if len(text) >= _MIN_CHARS and not _is_error_page(text):
-                logger.info(f"IK direct scrape: {url} -> {len(text)} chars")
-                return {"url": url, "text": text}
+                court = _extract_court_name(resp.text)
+                logger.info(f"IK direct scrape: {url} -> {len(text)} chars | court: {court}")
+                return {"url": url, "text": text, "court": court}
             logger.warning(f"IK scrape too short or error page: {url} ({len(text)} chars)")
             return None
         except Exception as e:
