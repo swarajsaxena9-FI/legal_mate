@@ -26,6 +26,18 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root():
+    return {
+        "service": "Legal Case Similarity Search API",
+        "status": "running",
+        "endpoints": {
+            "health": "GET /health",
+            "search": "POST /search  (form: text or file)"
+        }
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
