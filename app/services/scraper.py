@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 _JINA_BASE = "https://r.jina.ai/"
 _CONCURRENCY = 3
 _TIMEOUT = 30.0
-_MIN_CHARS = 500
+_MIN_CHARS = 200
 
 _IK_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -22,8 +22,7 @@ _ERROR_SIGNALS = ["just a moment", "captcha", "403: forbidden", "access denied",
 
 
 def _is_error_page(text: str) -> bool:
-    low = text.lower()
-    return any(signal in low for signal in _ERROR_SIGNALS)
+    return any(s in text.lower() for s in _ERROR_SIGNALS)
 
 
 def _extract_court_name(html: str) -> str:
@@ -34,105 +33,68 @@ def _extract_court_name(html: str) -> str:
 
 
 def _extract_ik_text(html: str) -> str:
-    """Extract judgement text from Indian Kanoon HTML."""
-    # Remove script/style tags
     html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    # Extract text from judgement div if present
     match = re.search(r'<div[^>]*id=["\']judgments?["\'][^>]*>(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
     if match:
         html = match.group(1)
-    # Strip remaining tags
     text = re.sub(r'<[^>]+>', ' ', html)
     text = re.sub(r'&nbsp;', ' ', text)
     text = re.sub(r'&amp;', '&', text)
-    text = re.sub(r'&lt;', '<', text)
-    text = re.sub(r'&gt;', '>', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 
-async def _scrape_indiankanoon(
+async def _try_direct(client: httpx.AsyncClient, url: str) -> str | None:
+    """Try direct HTTP scrape — works on residential IPs."""
+    try:
+        resp = await client.get(url, headers=_IK_HEADERS, timeout=_TIMEOUT, follow_redirects=True)
+        resp.raise_for_status()
+        text = _extract_ik_text(resp.text)
+        if len(text) >= _MIN_CHARS and not _is_error_page(text):
+            return text
+    except Exception:
+        pass
+    return None
+
+
+async def _scrape_one(
     client: httpx.AsyncClient,
     sem: asyncio.Semaphore,
-    url: str,
+    item: dict,
 ) -> dict | None:
+    url = item["url"]
+    title = item.get("title", "")
+    snippet = item.get("snippet", "")
+
     async with sem:
-        # Try direct scraping first (works on residential IPs / local)
-        try:
-            resp = await client.get(url, headers=_IK_HEADERS, timeout=_TIMEOUT, follow_redirects=True)
-            resp.raise_for_status()
-            text = _extract_ik_text(resp.text)
-            if len(text) >= _MIN_CHARS and not _is_error_page(text):
-                court = _extract_court_name(resp.text)
-                logger.info(f"IK direct: {url} -> {len(text)} chars")
-                return {"url": url, "text": text, "court": court}
-        except Exception as e:
-            logger.warning(f"IK direct failed for {url}: {e}")
+        # 1. Try direct HTTP (works locally)
+        if "indiankanoon.org" in url:
+            text = await _try_direct(client, url)
+            if text:
+                logger.info(f"Direct scrape: {url} -> {len(text)} chars")
+                return {"url": url, "text": text, "court": _extract_court_name("")}
 
-        # Fallback: Jina Reader (works from datacenter IPs like Render)
-        logger.info(f"Falling back to Jina for {url}")
-        headers = {"Accept": "text/plain", "X-Remove-Selector": "header,footer,nav,.sidebar"}
-        if JINA_API_KEY:
-            headers["Authorization"] = f"Bearer {JINA_API_KEY}"
-        try:
-            resp = await client.get(
-                _JINA_BASE + url,
-                headers=headers,
-                timeout=_TIMEOUT,
-                follow_redirects=True,
-            )
-            resp.raise_for_status()
-            text = resp.text.strip()
-            if len(text) >= _MIN_CHARS and not _is_error_page(text):
-                logger.info(f"Jina fallback: {url} -> {len(text)} chars")
-                return {"url": url, "text": text, "court": ""}
-        except Exception as e:
-            logger.warning(f"Jina fallback also failed for {url}: {e}")
+        # 2. Use snippet as fallback (always available from Serper, no HTTP needed)
+        if snippet and len(snippet) >= 50:
+            combined = f"{title}\n\n{snippet}" if title else snippet
+            logger.info(f"Using Serper snippet: {url} -> {len(combined)} chars")
+            return {"url": url, "text": combined, "court": ""}
 
+        logger.warning(f"No content available for {url}")
         return None
 
 
-async def _scrape_jina(
-    client: httpx.AsyncClient,
-    sem: asyncio.Semaphore,
-    url: str,
-) -> dict | None:
-    headers = {"Accept": "text/plain"}
-    if JINA_API_KEY:
-        headers["Authorization"] = f"Bearer {JINA_API_KEY}"
+async def scrape_urls(items: list[dict] | list[str]) -> list[dict]:
+    # Accept both old list[str] format and new list[dict] format
+    if items and isinstance(items[0], str):
+        items = [{"url": u, "title": "", "snippet": ""} for u in items]
 
-    async with sem:
-        try:
-            resp = await client.get(
-                _JINA_BASE + url,
-                headers=headers,
-                timeout=_TIMEOUT,
-                follow_redirects=True,
-            )
-            resp.raise_for_status()
-            text = resp.text.strip()
-            if len(text) >= _MIN_CHARS and not _is_error_page(text):
-                logger.info(f"Jina scrape: {url} -> {len(text)} chars")
-                return {"url": url, "text": text}
-            logger.warning(f"Jina returned error/short page for {url}")
-            return None
-        except Exception as e:
-            logger.warning(f"Jina scrape failed for {url}: {e}")
-            return None
-
-
-async def scrape_urls(urls: list[str]) -> list[dict]:
     sem = asyncio.Semaphore(_CONCURRENCY)
     async with httpx.AsyncClient() as client:
-        tasks = []
-        for url in urls:
-            if "indiankanoon.org" in url:
-                tasks.append(_scrape_indiankanoon(client, sem, url))
-            else:
-                tasks.append(_scrape_jina(client, sem, url))
+        tasks = [_scrape_one(client, sem, item) for item in items]
         results = await asyncio.gather(*tasks)
 
     docs = [r for r in results if r is not None]
-    logger.info(f"Successfully scraped {len(docs)}/{len(urls)} URLs")
+    logger.info(f"Scraped {len(docs)}/{len(items)} items")
     return docs

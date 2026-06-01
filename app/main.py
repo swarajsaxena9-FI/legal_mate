@@ -76,25 +76,25 @@ async def search(
         raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
     timings["extract"] = round(time.time() - t, 2)
 
-    # Stage 2: Search
+    # Stage 2: Search — returns list of {url, title, snippet}
     t = time.time()
     try:
-        urls = await search_legal_urls(extracted.get("search_queries", []))
+        search_results = await search_legal_urls(extracted.get("search_queries", []))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")
     timings["search"] = round(time.time() - t, 2)
 
-    if not urls:
+    if not search_results:
         return SearchResponse(
             extracted=extracted,
             results=[],
             meta=SearchMeta(n_urls=0, n_docs_scraped=0, n_chunks=0, timings=timings),
         )
 
-    # Stage 3: Scrape
+    # Stage 3: Scrape (uses snippet fallback when direct scraping blocked)
     t = time.time()
     try:
-        docs = await scrape_urls(urls)
+        docs = await scrape_urls(search_results)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scraping failed: {e}")
     timings["scrape"] = round(time.time() - t, 2)
@@ -103,7 +103,7 @@ async def search(
         return SearchResponse(
             extracted=extracted,
             results=[],
-            meta=SearchMeta(n_urls=len(urls), n_docs_scraped=0, n_chunks=0, timings=timings),
+            meta=SearchMeta(n_urls=len(search_results), n_docs_scraped=0, n_chunks=0, timings=timings),
         )
 
     # Stage 4: Chunk
@@ -149,7 +149,7 @@ async def search(
         extracted=extracted,
         results=citations,
         meta=SearchMeta(
-            n_urls=len(urls),
+            n_urls=len(search_results),
             n_docs_scraped=len(docs),
             n_chunks=len(chunks),
             timings=timings,

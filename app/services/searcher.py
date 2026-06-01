@@ -13,60 +13,50 @@ _IK_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-_LEGAL_SITES = [
-    "site:indiankanoon.org",
-    "site:main.sci.gov.in",
-    "site:livelaw.in",
-    "site:barandbench.com",
-]
-
-_CASE_URL_PATTERNS = [
-    r"indiankanoon\.org/doc/\d+",
-    r"main\.sci\.gov\.in/supremecourt/",
-    r"livelaw\.in/(top-stories|high-court|supreme-court|news-updates)/",
-    r"barandbench\.com/(news|stories)/",
-]
+_CASE_URL_RE = re.compile(
+    r"(indiankanoon\.org/doc/\d+|main\.sci\.gov\.in/supremecourt/|livelaw\.in/(top-stories|high-court|supreme-court|news-updates)/|barandbench\.com/(news|stories)/)"
+)
 
 
 def _is_case_url(url: str) -> bool:
-    return any(re.search(p, url) for p in _CASE_URL_PATTERNS)
+    return bool(_CASE_URL_RE.search(url))
 
-
-# ── Serper (primary — works from any IP including Render) ──────────────────────
 
 async def _serper_search(
     client: httpx.AsyncClient,
     query: str,
     num: int = 5,
-) -> list[str]:
-    headers = {
-        "X-API-KEY": SERPER_API_KEY,
-        "Content-Type": "application/json",
-    }
+) -> list[dict]:
     try:
         resp = await client.post(
             _SERPER_ENDPOINT,
             json={"q": query, "num": num, "gl": "in", "hl": "en"},
-            headers=headers,
+            headers={"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"},
             timeout=15.0,
         )
         resp.raise_for_status()
         items = resp.json().get("organic", [])
-        urls = [item["link"] for item in items if "link" in item]
-        logger.info(f"Serper: {len(urls)} results for '{query[:60]}'")
-        return urls
+        results = []
+        for item in items:
+            url = item.get("link", "")
+            if _is_case_url(url):
+                results.append({
+                    "url": url,
+                    "title": item.get("title", ""),
+                    "snippet": item.get("snippet", ""),
+                })
+        logger.info(f"Serper: {len(results)} case results for '{query[:60]}'")
+        return results
     except Exception as e:
-        logger.warning(f"Serper search failed for '{query[:60]}': {e}")
+        logger.warning(f"Serper search failed: {e}")
         return []
 
-
-# ── Indian Kanoon direct (fallback — works locally, blocked on Render) ─────────
 
 async def _ik_direct_search(
     client: httpx.AsyncClient,
     query: str,
     court: str = "",
-) -> list[str]:
+) -> list[dict]:
     formInput = f"{query} court:{court}" if court else query
     try:
         resp = await client.get(
@@ -78,51 +68,39 @@ async def _ik_direct_search(
         )
         resp.raise_for_status()
         matches = re.findall(r'href="(/doc/\d+/)"', resp.text)
-        urls = list(dict.fromkeys(f"https://indiankanoon.org{m}" for m in matches))
-        logger.info(f"IK direct ({court or 'general'}): {len(urls)} results")
-        return urls
+        results = [
+            {"url": f"https://indiankanoon.org{m}", "title": "", "snippet": ""}
+            for m in dict.fromkeys(matches)
+        ]
+        logger.info(f"IK direct ({court or 'general'}): {len(results)} results")
+        return results
     except Exception as e:
         logger.warning(f"IK direct search failed: {e}")
         return []
 
 
-# ── Main search function ────────────────────────────────────────────────────────
-
-async def search_legal_urls(queries: list[str]) -> list[str]:
+async def search_legal_urls(queries: list[str]) -> list[dict]:
+    """Returns list of {url, title, snippet} dicts."""
     seen: set[str] = set()
-    urls: list[str] = []
+    results: list[dict] = []
 
     async with httpx.AsyncClient() as client:
         if SERPER_API_KEY:
-            # Use Serper with IK site filter + general legal search
-            serper_tasks = []
-            for q in queries:
-                serper_tasks.append(_serper_search(client, f"{q} site:indiankanoon.org", num=5))
-            serper_tasks.append(_serper_search(client, f"{queries[0]} Indian court judgment", num=3))
-
-            all_results = await asyncio.gather(*serper_tasks)
-            for batch in all_results:
-                for url in batch:
-                    # Only keep actual case doc URLs, not search/index pages
-                    if url not in seen and _is_case_url(url):
-                        seen.add(url)
-                        urls.append(url)
+            tasks = [_serper_search(client, f"{q} site:indiankanoon.org", num=5) for q in queries]
+            tasks.append(_serper_search(client, f"{queries[0]} Indian court judgment", num=3))
+            all_batches = await asyncio.gather(*tasks)
         else:
-            # Fallback: direct IK scraping (local dev)
             courts = ["supremecourt", "delhi", "bombay", "allahabad", "madras"]
-            tasks = []
-            for i, court in enumerate(courts):
-                q = queries[i % len(queries)]
-                tasks.append(_ik_direct_search(client, q, court))
+            tasks = [_ik_direct_search(client, queries[i % len(queries)], c) for i, c in enumerate(courts)]
             tasks.append(_ik_direct_search(client, queries[-1]))
+            all_batches = await asyncio.gather(*tasks)
 
-            all_results = await asyncio.gather(*tasks)
-            for batch in all_results:
-                for url in batch:
-                    if url not in seen and _is_case_url(url):
-                        seen.add(url)
-                        urls.append(url)
+        for batch in all_batches:
+            for item in batch:
+                if item["url"] not in seen:
+                    seen.add(item["url"])
+                    results.append(item)
 
-    final = urls[:MAX_URLS]
-    logger.info(f"Total: {len(final)} unique URLs found")
+    final = results[:MAX_URLS]
+    logger.info(f"Total: {len(final)} unique case URLs")
     return final
