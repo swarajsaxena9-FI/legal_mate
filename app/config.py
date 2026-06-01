@@ -7,6 +7,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GOOGLE_CSE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "")
 JINA_API_KEY = os.getenv("JINA_API_KEY", "")
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
 
 GEN_MODEL = "gemini-2.5-flash"
 EMBED_MODEL = "gemini-embedding-001"
