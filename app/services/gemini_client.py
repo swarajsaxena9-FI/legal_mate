@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 _MAX_RETRIES = 5
-_BASE_DELAY = 62.0  # free tier resets every 60s; wait full window
+_BASE_DELAY = 10.0  # 503 recovers fast; 429 needs 60s but backoff handles it
 
 
 def _retry_on_429(fn, *args, **kwargs):
@@ -20,7 +20,7 @@ def _retry_on_429(fn, *args, **kwargs):
             return fn(*args, **kwargs)
         except Exception as e:
             msg = str(e)
-            if "429" in msg or "quota" in msg.lower() or "rate" in msg.lower():
+            if any(x in msg for x in ["429", "503", "quota", "rate", "unavailable", "overloaded"]):
                 if attempt < _MAX_RETRIES - 1:
                     logger.warning(f"Rate limit hit, retrying in {delay}s (attempt {attempt+1})")
                     time.sleep(delay)
