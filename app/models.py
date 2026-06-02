@@ -9,6 +9,7 @@ class Citation(BaseModel):
     key_overlap: list[str]
     reasoning: str
     source_url: str
+    source: str = "Indian Kanoon"
 
 
 class SearchMeta(BaseModel):

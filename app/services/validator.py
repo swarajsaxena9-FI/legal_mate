@@ -54,10 +54,15 @@ def validate_matches(user_case_summary: str, top_chunks: list[dict]) -> list[dic
 
     # Ensure all required keys exist
     required = {"case_name", "citation", "relevance_score", "key_overlap", "reasoning", "source_url"}
+    # Build URL -> source map from top_chunks
+    url_source_map = {c["url"]: c.get("source", "Indian Kanoon") for c in top_chunks}
+
     validated = []
     for item in results:
         if required.issubset(item.keys()):
             item["relevance_score"] = float(item["relevance_score"])
+            # Inject source from search metadata
+            item["source"] = url_source_map.get(item.get("source_url", ""), "Indian Kanoon")
             validated.append(item)
 
     validated.sort(key=lambda x: x["relevance_score"], reverse=True)

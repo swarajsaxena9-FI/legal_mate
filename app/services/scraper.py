@@ -73,13 +73,13 @@ async def _scrape_one(
             text = await _try_direct(client, url)
             if text:
                 logger.info(f"Direct scrape: {url} -> {len(text)} chars")
-                return {"url": url, "text": text, "court": _extract_court_name("")}
+                return {"url": url, "text": text, "court": _extract_court_name(""), "source": item.get("source", "Indian Kanoon")}
 
         # 2. Use snippet as fallback (always available from Serper, no HTTP needed)
         if snippet and len(snippet) >= 50:
             combined = f"{title}\n\n{snippet}" if title else snippet
             logger.info(f"Using Serper snippet: {url} -> {len(combined)} chars")
-            return {"url": url, "text": combined, "court": ""}
+            return {"url": url, "text": combined, "court": "", "source": item.get("source", "Indian Kanoon")}
 
         logger.warning(f"No content available for {url}")
         return None

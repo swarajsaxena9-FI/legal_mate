@@ -13,13 +13,33 @@ _IK_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+# Source sites searched in parallel
+_SOURCES = {
+    "indiankanoon.org": "Indian Kanoon",
+    "livelaw.in":       "LiveLaw",
+    "barandbench.com":  "Bar & Bench",
+    "sci.gov.in":       "Supreme Court of India",
+    "judis.nic.in":     "JUDIS",
+}
+
 _CASE_URL_RE = re.compile(
-    r"(indiankanoon\.org/doc/\d+|main\.sci\.gov\.in/supremecourt/|livelaw\.in/(top-stories|high-court|supreme-court|news-updates)/|barandbench\.com/(news|stories)/)"
+    r"(indiankanoon\.org/doc/\d+"
+    r"|livelaw\.in/(top-stories|high-court|supreme-court|news-updates|law-firms)/"
+    r"|barandbench\.com/(news|stories)/"
+    r"|sci\.gov\.in/supremecourt/"
+    r"|judis\.nic\.in/)"
 )
 
 
 def _is_case_url(url: str) -> bool:
     return bool(_CASE_URL_RE.search(url))
+
+
+def _detect_source(url: str) -> str:
+    for domain, name in _SOURCES.items():
+        if domain in url:
+            return name
+    return "Web"
 
 
 async def _serper_search(
@@ -44,24 +64,23 @@ async def _serper_search(
                     "url": url,
                     "title": item.get("title", ""),
                     "snippet": item.get("snippet", ""),
+                    "source": _detect_source(url),
                 })
-        logger.info(f"Serper: {len(results)} case results for '{query[:60]}'")
+        logger.info(f"Serper [{query[query.rfind('site:'):]}]: {len(results)} results")
         return results
     except Exception as e:
-        logger.warning(f"Serper search failed: {e}")
+        logger.warning(f"Serper search failed for '{query[:60]}': {e}")
         return []
 
 
 async def _ik_direct_search(
     client: httpx.AsyncClient,
     query: str,
-    court: str = "",
 ) -> list[dict]:
-    formInput = f"{query} court:{court}" if court else query
     try:
         resp = await client.get(
             _IK_SEARCH,
-            params={"formInput": formInput, "pagenum": 0},
+            params={"formInput": query, "pagenum": 0},
             headers=_IK_HEADERS,
             timeout=20.0,
             follow_redirects=True,
@@ -69,10 +88,10 @@ async def _ik_direct_search(
         resp.raise_for_status()
         matches = re.findall(r'href="(/doc/\d+/)"', resp.text)
         results = [
-            {"url": f"https://indiankanoon.org{m}", "title": "", "snippet": ""}
+            {"url": f"https://indiankanoon.org{m}", "title": "", "snippet": "", "source": "Indian Kanoon"}
             for m in dict.fromkeys(matches)
         ]
-        logger.info(f"IK direct ({court or 'general'}): {len(results)} results")
+        logger.info(f"IK direct: {len(results)} results")
         return results
     except Exception as e:
         logger.warning(f"IK direct search failed: {e}")
@@ -80,21 +99,32 @@ async def _ik_direct_search(
 
 
 async def search_legal_urls(queries: list[str]) -> list[dict]:
-    """Returns list of {url, title, snippet} dicts."""
+    """Returns list of {url, title, snippet, source} dicts."""
     seen: set[str] = set()
     results: list[dict] = []
+    primary = queries[0]
 
     async with httpx.AsyncClient() as client:
         if SERPER_API_KEY:
-            tasks = [_serper_search(client, f"{q} site:indiankanoon.org", num=5) for q in queries]
-            tasks.append(_serper_search(client, f"{queries[0]} Indian court judgment", num=3))
+            # Search all sources in parallel using all queries
+            tasks = [
+                # Indian Kanoon — most queries
+                _serper_search(client, f"{primary} site:indiankanoon.org", num=5),
+                _serper_search(client, f"{queries[-1]} site:indiankanoon.org", num=4),
+                # LiveLaw — good for recent HC/SC judgements
+                _serper_search(client, f"{primary} site:livelaw.in", num=3),
+                # Bar & Bench
+                _serper_search(client, f"{primary} site:barandbench.com", num=2),
+                # Supreme Court official
+                _serper_search(client, f"{primary} site:sci.gov.in", num=2),
+            ]
             all_batches = await asyncio.gather(*tasks)
         else:
-            courts = ["supremecourt", "delhi", "bombay", "allahabad", "madras"]
-            tasks = [_ik_direct_search(client, queries[i % len(queries)], c) for i, c in enumerate(courts)]
-            tasks.append(_ik_direct_search(client, queries[-1]))
+            # Local fallback: direct IK scraping
+            tasks = [_ik_direct_search(client, q) for q in queries]
             all_batches = await asyncio.gather(*tasks)
 
+        # Merge — IK first, then other sources for diversity
         for batch in all_batches:
             for item in batch:
                 if item["url"] not in seen:
@@ -102,5 +132,9 @@ async def search_legal_urls(queries: list[str]) -> list[dict]:
                     results.append(item)
 
     final = results[:MAX_URLS]
-    logger.info(f"Total: {len(final)} unique case URLs")
+    source_counts = {}
+    for r in final:
+        s = r.get("source", "Web")
+        source_counts[s] = source_counts.get(s, 0) + 1
+    logger.info(f"Total: {len(final)} URLs — sources: {source_counts}")
     return final

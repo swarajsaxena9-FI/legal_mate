@@ -151,6 +151,22 @@ if "results" in st.session_state and st.session_state["results"] is not None:
         st.stop()
 
     # ── Result Cards ────────────────────────────────────────────────────────────
+    # Source summary above results
+    source_counts = {}
+    for r in all_results:
+        s = r.get("source", "Indian Kanoon")
+        source_counts[s] = source_counts.get(s, 0) + 1
+    source_summary = "  |  ".join(f"**{s}** ({n})" for s, n in source_counts.items())
+    st.caption(f"Sources searched: {source_summary}")
+
+    _SOURCE_COLORS = {
+        "Indian Kanoon":        ("#e8f4fd", "#1a6fa0"),
+        "LiveLaw":              ("#fff3e0", "#e65100"),
+        "Bar & Bench":          ("#f3e5f5", "#7b1fa2"),
+        "Supreme Court of India": ("#e8f5e9", "#2e7d32"),
+        "JUDIS":                ("#fce4ec", "#c62828"),
+    }
+
     for i, r in enumerate(filtered):
         score = r.get("relevance_score", 0)
         score_pct = score * 100
@@ -159,10 +175,19 @@ if "results" in st.session_state and st.session_state["results"] is not None:
         reasoning = r.get("reasoning", "")
         overlaps = r.get("key_overlap", [])
         source_url = r.get("source_url", "")
+        source = r.get("source", "Indian Kanoon")
+        bg, fg = _SOURCE_COLORS.get(source, ("#f5f5f5", "#333333"))
 
         col_a, col_b = st.columns([4, 1])
         with col_a:
             st.markdown(f"### {i+1}. {case_name}")
+            # Source badge
+            st.markdown(
+                f'<span style="background:{bg};color:{fg};padding:3px 10px;'
+                f'border-radius:12px;font-size:0.8em;font-weight:600;">'
+                f'{source}</span>',
+                unsafe_allow_html=True,
+            )
             if citation:
                 st.markdown(f"**Citation:** `{citation}`")
         with col_b:

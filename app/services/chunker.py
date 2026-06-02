@@ -17,9 +17,10 @@ def chunk_documents(docs: list[dict]) -> list[dict]:
         url = doc["url"]
         text = doc["text"]
         splits = _splitter.split_text(text)
+        source = doc.get("source", "Indian Kanoon")
         for i, split in enumerate(splits):
             if split.strip():
-                chunks.append({"url": url, "text": split.strip(), "chunk_index": i})
+                chunks.append({"url": url, "text": split.strip(), "chunk_index": i, "source": source})
     # Cap at 20 chunks: free tier = 100 embed req/min, 20 chunks uses only 20% allowing ~4 searches/min
     if len(chunks) > 20:
         logger.info(f"Capping chunks from {len(chunks)} to 20 for free-tier quota")
