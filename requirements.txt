@@ -10,3 +10,4 @@ pydantic
 pytest
 pytest-asyncio
 python-multipart
+duckduckgo-search
